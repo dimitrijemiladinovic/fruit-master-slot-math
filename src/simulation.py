@@ -1,91 +1,53 @@
 """
-Fruit Master v1.0 – Monte Carlo simulation
-Validates theoretical RTP (96.1125%) and estimates volatility & hit frequency.
+Fruit Master v1.1 - Monte Carlo validation of the theoretical math.
+
+Uses the same game model as the enumeration (slot_model.py). Reel stops are
+drawn uniformly and independently; the RTP and hit frequency are reported with
+95% confidence intervals, and the model counts as validated when the exact
+values lie inside those intervals.
 """
 import numpy as np
 
-reel1 = np.array(['C','C','C','C','L','L','L','O','O','B','C','C','L','L','O','O','B','W','-','-'])
-reel2 = np.array(['C','C','C','L','L','L','O','O','O','B','C','L','L','O','O','B','W','-','-','-'])
-reel3 = np.array(['C','C','L','L','L','O','O','O','B','B','C','L','O','O','B','W','-','-','-','-'])
+from slot_model import REELS, enumerate_cycle, payout_table
 
-THEORETICAL_RTP = 0.961125
-THEORETICAL_HIT = 0.226125
-
-
-def get_payout(s1, s2, s3):
-    """Final balanced paytable – same order as enumeration."""
-    symbols = [s1, s2, s3]
-    n_wild = symbols.count('W')
-
-    if s1 == 'W' and s2 == 'W' and s3 == 'W':
-        return 80
-    if all(s in ('B', 'W') for s in symbols):
-        return 40
-    if all(s in ('O', 'W') for s in symbols):
-        return 16
-    if all(s in ('L', 'W') for s in symbols):
-        return 8
-    if all(s in ('C', 'W') for s in symbols):
-        return 4
-    if n_wild == 2:
-        return 10
-    if n_wild == 1:
-        return 1
-    if s1 == 'C' and s2 == 'C':
-        return 1
-    return 0
-
-
-def spin():
-    return (
-        np.random.choice(reel1),
-        np.random.choice(reel2),
-        np.random.choice(reel3),
-    )
+Z95 = 1.96
 
 
 def run_simulation(n_spins=1_000_000, seed=42):
-    np.random.seed(seed)
+    rng = np.random.default_rng(seed)
+    pays = np.array(payout_table(), dtype=np.float64)          # shape (20, 20, 20)
+    stops = [rng.integers(0, len(reel), size=n_spins) for reel in REELS]
+    wins = pays[stops[0], stops[1], stops[2]]
 
-    results = np.empty(n_spins, dtype=np.float64)
-    for i in range(n_spins):
-        results[i] = get_payout(*spin())
+    mean = wins.mean()
+    sd = wins.std(ddof=1)
+    half = Z95 * sd / np.sqrt(n_spins)
+    hit = (wins > 0).mean()
+    hit_half = Z95 * np.sqrt(hit * (1 - hit) / n_spins)
 
-    sim_rtp = float(np.mean(results))
-    volatility = float(np.std(results))
-    hit_freq = float(np.mean(results > 0))
-    max_observed = float(np.max(results))
+    exact = enumerate_cycle()
+    rtp_ok = mean - half <= exact['rtp'] <= mean + half
+    hit_ok = hit - hit_half <= exact['hit_frequency'] <= hit + hit_half
 
-    print("=== Fruit Master v1.0 – Monte Carlo ===")
-    print(f"Spins:              {n_spins:,}")
-    print(f"Seed:               {seed}")
+    print("=== Fruit Master v1.1 - Monte Carlo ===")
+    print(f"Spins: {n_spins:,}   seed: {seed}")
     print()
-    print(f"Simulated RTP:      {sim_rtp:.6f}  ({sim_rtp * 100:.4f}%)")
-    print(f"Theoretical RTP:    {THEORETICAL_RTP:.6f}  ({THEORETICAL_RTP * 100:.4f}%)")
-    print(f"Difference:         {abs(sim_rtp - THEORETICAL_RTP):.6f}  "
-          f"({abs(sim_rtp - THEORETICAL_RTP) * 100:.4f} pp)")
+    print(f"Simulated RTP:   {mean * 100:.4f}%  95% CI [{(mean - half) * 100:.4f}%, {(mean + half) * 100:.4f}%]")
+    print(f"Theoretical RTP: {exact['rtp'] * 100:.4f}%  -> {'inside' if rtp_ok else 'OUTSIDE'} the interval")
+    print(f"Simulated hit:   {hit * 100:.4f}%  95% CI [{(hit - hit_half) * 100:.4f}%, {(hit + hit_half) * 100:.4f}%]")
+    print(f"Theoretical hit: {exact['hit_frequency'] * 100:.4f}%  -> {'inside' if hit_ok else 'OUTSIDE'} the interval")
+    print(f"Std deviation:   {sd:.4f} (exact {exact['sigma']:.4f})")
+    print(f"Max observed:    {wins.max():.0f}x")
     print()
-    print(f"Volatility (std):   {volatility:.6f}")
-    print(f"Hit frequency:      {hit_freq:.6f}  ({hit_freq * 100:.4f}%)")
-    print(f"Theoretical hit:    {THEORETICAL_HIT:.6f}  ({THEORETICAL_HIT * 100:.4f}%)")
-    print(f"Max observed win:   {max_observed:.0f}")
-    print()
-
-    # Sanity check
-    if abs(sim_rtp - THEORETICAL_RTP) < 0.01:
-        print("OK: Simulated RTP is within 1 percentage point of theory.")
-    else:
-        print("WARN: Larger deviation – check get_payout or increase n_spins.")
+    print("Validated." if rtp_ok and hit_ok else
+          "Not validated: check the model, or remember that 1 run in 20 falls outside a 95% interval.")
 
     return {
-        "n_spins": n_spins,
-        "sim_rtp": sim_rtp,
-        "theoretical_rtp": THEORETICAL_RTP,
-        "volatility": volatility,
-        "hit_freq": hit_freq,
-        "max_observed": max_observed,
+        'n_spins': n_spins, 'seed': seed, 'sim_rtp': float(mean), 'ci_half_width': float(half),
+        'sim_hit': float(hit), 'sd': float(sd), 'max_observed': float(wins.max()),
+        'rtp_ok': bool(rtp_ok), 'hit_ok': bool(hit_ok),
     }
 
 
 if __name__ == "__main__":
-    run_simulation(n_spins=1_000_000, seed=42)
+    run_simulation()

@@ -1,4 +1,0 @@
-pip install numpy
-
-python src/enumerate_rtp.py
-python src/simulation.py
